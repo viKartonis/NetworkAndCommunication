@@ -10,6 +10,7 @@ public class Sender implements Runnable
     private MulticastSocket udpSender;
     private InetAddress group;
     private String message = InetAddress.getLocalHost().toString();
+    private int port = 8080;
 
     public Sender() throws IOException
     {
@@ -25,6 +26,7 @@ public class Sender implements Runnable
 
     public Sender(String address, int port) throws IOException
     {
+        this.port = port;
         group = InetAddress.getByName(address);
         udpSender = new MulticastSocket(port);
     }
@@ -34,10 +36,9 @@ public class Sender implements Runnable
     {
         try
         {
-            DatagramPacket sendMessage = new DatagramPacket(message.getBytes(), message.length(), group, 8080);
+            DatagramPacket sendMessage = new DatagramPacket(message.getBytes(), message.length(), group, port);
 
             udpSender.joinGroup(group);
-
             while (true)
             {
                 udpSender.send(sendMessage);

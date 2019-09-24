@@ -12,17 +12,18 @@ public class Main {
             if (args.length == 0)
             {
             sender = new Sender();
-            receiver = new Receiver(sender.getMessage());
+            receiver = new Receiver();
             }
             else if (args.length == 1)
             {
                 sender = new Sender(args[0]);
-                receiver = new Receiver(args[0], sender.getMessage());
+                receiver = new Receiver();
             }
             else
             {
-                sender = new Sender(args[0], Integer.parseInt(args[1]));
-                receiver = new Receiver(args[0], Integer.parseInt(args[1]), sender.getMessage());
+                receiver = new Receiver(args[0], Integer.parseInt(args[1]));
+                sender = new Sender(args[0], receiver.getPort());
+
             }
             Thread send = new Thread(sender);
             send.start();
