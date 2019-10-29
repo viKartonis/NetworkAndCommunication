@@ -19,7 +19,7 @@ public class TreeNode
     private Set<IPEndPoint> child;
     private IPEndPoint ipEndPointReserveNode;
     private Map<IPEndPoint, Date> tracker;
-    private Map<IPEndPoint, Set<UUID>> uuidAddress;///premature optimization is the root of evil
+    private Map<IPEndPoint, Set<UUID>> uuidAddress;
     private Map<UUID, Message> queueMessage;
 
     private IPEndPoint ipEndPointParent;
@@ -168,15 +168,35 @@ public class TreeNode
                                 {
                                     child.add(ipEndPoint);
                                 }
+
+                                if(ipEndPointParent != null)
+                                {
+                                    Message<IPEndPoint> reserveNode = new Message<>(MessageType.ReserveNode, name,
+                                            ipEndPointParent);
+                                    socket.send(new DatagramPacket(reserveNode.toByteArray(),
+                                            reserveNode.toByteArray().length,  receiveMessage.getAddress(),
+                                            receiveMessage.getPort()));//отправить резервную ноду
+                                    queueMessage.put(reserveNode.getPersonalUid(), reserveNode);
+                                    createOrInsert(ipEndPoint, reserveNode.getPersonalUid());
+
+                                }
                                 break;
                             }
                             case Confirmation:
                             {
-                            //    System.out.println(receiveMessage.getAddress().toString() + receiveMessage.getPort());
-                                tracker.replace(ipEndPoint, new Date());
+                                if (tracker.isEmpty())
+                                {
+                                    tracker.put(ipEndPoint, new Date());
+                                }
+                                else
+                                {
+                                    tracker.replace(ipEndPoint, new Date());
+                                }
                                 Message<UUID> uuidMessage = (Message<UUID>) message;
-                                queueMessage.remove(uuidMessage.getContent());
-                                uuidAddress.get(ipEndPoint).remove(uuidMessage.getContent());
+
+                               // queueMessage.remove(uuidMessage.getContent());
+                                if (uuidAddress.get(ipEndPoint) != null)
+                                    uuidAddress.get(ipEndPoint).remove(uuidMessage.getContent());
                                 break;
                             }
                             case ReserveNode:
@@ -184,8 +204,14 @@ public class TreeNode
                                // System.out.println(receiveMessage.getAddress().toString() + receiveMessage.getPort());
                                 tracker.replace(ipEndPoint, new Date());
                                 Message<IPEndPoint> ipEndPointMessage = (Message<IPEndPoint>) message;
-                                ipEndPointReserveNode = new IPEndPoint(ipEndPointMessage.getContent().getAddress(),
-                                        ipEndPointMessage.getContent().getPort());
+
+                                if (ipEndPointMessage.getContent() != null)
+                                {
+                                    ipEndPointReserveNode = new IPEndPoint(ipEndPointMessage.getContent().getAddress(),
+                                            ipEndPointMessage.getContent().getPort());
+                                }
+
+
                                 sendConfirmationMessage(message.getPersonalUid(), ipEndPoint);
                                 break;
                             }
@@ -234,11 +260,15 @@ public class TreeNode
                     {
                         deleteList.add(current.getKey());
                         System.out.println(current.getKey().toString());
+
                         if(current.getKey().equals(ipEndPointParent))
                         {
                             //перестроить дерево
                             ipEndPointParent = ipEndPointReserveNode;
                             setConnection(ipEndPointReserveNode);
+
+                            ipEndPointReserveNode = null;
+                            sendDataMessageExceptOne(new Message(MessageType.ReserveNode, name, ipEndPointParent), ipEndPointParent);
                         }
                         else
                         {
@@ -257,11 +287,12 @@ public class TreeNode
                 {
                     for(UUID uuid : current.getValue())
                     {
-                        byte[] message = queueMessage.get(uuid).toByteArray();
-                        socket.send(new DatagramPacket(message, message.length, current.getKey().getAddress(),
-                                current.getKey().getPort()));
-                    }
+                            byte[] message = queueMessage.get(uuid).toByteArray();
+                            socket.send(new DatagramPacket(message, message.length, current.getKey().getAddress(),
+                                    current.getKey().getPort()));
+                        }
                 }
+
                 //check
                 sendDataMessageEveryNode(new Message(MessageType.Check, name));
             }
@@ -277,3 +308,4 @@ public class TreeNode
 
     }
 }
+
