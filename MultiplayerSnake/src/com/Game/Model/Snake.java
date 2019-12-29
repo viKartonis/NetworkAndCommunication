@@ -1,4 +1,4 @@
-package com.company;
+package com.game.model;
 
 import java.util.LinkedList;
 import java.util.function.BiFunction;
@@ -7,11 +7,14 @@ public class Snake
 {
     private LinkedList<Coord> listCoord;
     private Direction direction;
+    private int score = 0;
+    private int player_id = 0;
 
     public Snake()
     {
         listCoord = new LinkedList<>();
         direction = null;
+        player_id++;
     }
     public void appendTail(Coord coord)
     {
@@ -79,4 +82,11 @@ public class Snake
             }
         }
     }
+    public void incrementScore()
+    {
+        score++;
+    }
+
+    public int getId()
+    { return player_id;}
 }

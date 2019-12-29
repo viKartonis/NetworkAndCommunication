@@ -1,4 +1,4 @@
-package com.company;
+package com.game.model;
 
 public class Coord
 {

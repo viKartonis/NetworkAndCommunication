@@ -1,4 +1,4 @@
-package com.company;
+package com.game.model;
 
 import java.util.LinkedList;
 import java.util.Random;
@@ -81,11 +81,12 @@ public class GameField
 
         if (snake.getHead().equals(food))
         {
+            snake.incrementScore();
             field[endY][endX] = GameState.SNAKE;
             snake.appendTail(new Coord(endX, endY));
             generateFood();
         }
-        field[headY][headX] = GameState.SNAKE;
+        field[headY][snake.getHead().getX()] = GameState.SNAKE;
     }
 
     public void setDirection(Direction direction)
@@ -111,7 +112,7 @@ public class GameField
         return new Coord(snake.getTail().getX(), snake.getTail().getY());
     }
 
-    public LinkedList<Coord> getSnake()
+    public LinkedList<Coord> getSnakeCoord()
     {
         return snake.getSnake();
     }
@@ -119,6 +120,11 @@ public class GameField
     public Coord getFood()
     {
         return food;
+    }
+
+    public Snake getSnake()
+    {
+        return snake;
     }
 }
 
