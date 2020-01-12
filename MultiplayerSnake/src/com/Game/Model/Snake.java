@@ -8,14 +8,19 @@ public class Snake
     private LinkedList<Coord> listCoord;
     private Direction direction;
     private int score = 0;
-    private int player_id = 0;
 
     public Snake()
     {
         listCoord = new LinkedList<>();
-        direction = null;
-        player_id++;
+        direction = Direction.UP;
     }
+
+    public Snake(LinkedList<Coord> coords, Direction direction)
+    {
+        listCoord = coords;
+        this.direction = direction;
+    }
+
     public void appendTail(Coord coord)
     {
         listCoord.add(coord);
@@ -86,7 +91,4 @@ public class Snake
     {
         score++;
     }
-
-    public int getId()
-    { return player_id;}
 }

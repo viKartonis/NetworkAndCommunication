@@ -21,13 +21,12 @@ public class UDPManager
 
 
     public UDPManager(DatagramSocket datagramSocket, Map<Long, SnakesProto.GameMessage> queueMessage,
-                      Set<IPEndPoint> child, Map<IPEndPoint, Set<Long>> seqAddress, IPEndPoint ipEndPointParent)
+                      Set<IPEndPoint> child, Map<IPEndPoint, Set<Long>> seqAddress)
     {
         this.datagramSocket = datagramSocket;
         this.queueMessage = queueMessage;
         this.child = child;
         this.seqAddress = seqAddress;
-        this.ipEndPointParent = ipEndPointParent;
     }
 
 
@@ -100,14 +99,17 @@ public class UDPManager
     }
 
     public void setConnection(IPEndPoint ipEndPoint, SnakesProto.PlayerType playersType, boolean viewer,
-                              String playerName)
+                              String playerName, long seq)
             throws IOException
     {
+        ipEndPointParent = ipEndPoint;
+
         SnakesProto.GameMessage.JoinMsg message = SnakesProto.GameMessage.JoinMsg.newBuilder()
                 .setPlayerType(playersType)
                 .setOnlyView(viewer)
                 .setName(playerName).build();
-        SnakesProto.GameMessage gameMessage = SnakesProto.GameMessage.newBuilder().setJoin(message).build();
+        SnakesProto.GameMessage gameMessage = SnakesProto.GameMessage.newBuilder().setJoin(message).setMsgSeq(seq)
+                .build();
         queueMessage.put(gameMessage.getMsgSeq(), gameMessage);
         byte[] analise = gameMessage.toByteArray();
         datagramSocket.send(new DatagramPacket(analise, analise.length, ipEndPoint.getAddress(),
@@ -119,5 +121,17 @@ public class UDPManager
     {
         datagramSocket.send(new DatagramPacket(message.toByteArray(), message.toByteArray().length,
                 ipEndPoint.getAddress(), ipEndPoint.getPort()));
+        queueMessage.put(message.getMsgSeq(), message);
+        createOrInsert(ipEndPoint, message.getMsgSeq());
+    }
+
+    public IPEndPoint getIpEndPointParent()
+    {
+        return ipEndPointParent;
+    }
+
+    public void setIpEndPointParent(IPEndPoint master)
+    {
+        ipEndPointParent = master;
     }
 }

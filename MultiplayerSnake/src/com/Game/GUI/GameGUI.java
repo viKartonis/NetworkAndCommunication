@@ -1,6 +1,5 @@
 package com.game.gui;
 
-import com.game.controller.Controller;
 import com.game.model.Coord;
 import com.game.model.GameField;
 import com.game.model.Snake;
@@ -12,78 +11,116 @@ import javafx.scene.control.Button;
 import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 
-import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
 
 public class GameGUI
 {
     private GameField field;
     private final int increase = 20;
-    private Controller controller;
-    private LinkedList<Coord> snake;
     private GraphicsContext graphicsContext;
     private Canvas canvas;
     private Stage stage;
     private Group root;
-    private Coord food;
-    private boolean lost = false;
+    private int lost = 0;
     private int height;
     private int width;
+    private int updateTime;
+    private Runnable onLostCallBack;
+    private int playerId;
 
-    public GameGUI(Canvas canvas, Stage stage, Group root)
+    public GameGUI(Runnable onLostCallBack, Canvas canvas, Stage stage, Group root, GameField field, int updateTime,
+                   int playerId)
     {
         this.graphicsContext = canvas.getGraphicsContext2D();
         this.canvas = canvas;
         this.stage = stage;
         this.root = root;
+        this.field = field;
+        this.updateTime = updateTime;
+        this.onLostCallBack = onLostCallBack;
+        this.playerId = playerId;
     }
-    public void init(int height, int width)
+
+    public void init(int height, int width, int foodNumber, float probability, float foodPerPlayer)
     {
         this.height = height;
         this.width = width;
-        controller = new Controller(height, width);
-        field = controller.getField();
+        field.setField(height, width, foodNumber, probability, foodPerPlayer);
+    }
+
+    public void drawReceivedField(int height, int width)
+    {
+        this.height = height;
+        this.width = width;
     }
 
     public void lostWindow()
     {
-        Scene lostScene = new Scene(root, 400, 300);
-        Button tryAgain = new Button("Try again");
         Button exit = new Button("Exit");
 
-        stage.setScene(lostScene);
+        Group root = new Group();
+        Stage primaryStage = new Stage();
+        root.getChildren().add(exit);
+        Scene scene = new Scene(root, 200, 100);
+
+        primaryStage.setTitle("You lost :(");
+        primaryStage.setScene(scene);
+        primaryStage.show();
+
+        exit.setOnAction((event ->
+        {
+            onLostCallBack.run();
+            primaryStage.close();
+            stage.close();
+            System.exit(0);
+        }));
     }
 
     public void draw()
     {
-        field.updateField();
-        lost = field.getLost();
-        if(lost)
+        synchronized (field)
         {
+            field.updateField();
+
+            //lost += (field.getLost() ? 1 : 0);
+//            if (1 == lost)
+//            {
+//                lostWindow();
+//            }
+            graphicsContext.setFill(Color.BISQUE);
+            graphicsContext.fillRect(0, 0, width * increase, height * increase);
+
+            List<Coord> foods = field.getFood();
+            graphicsContext.setFill(Color.RED);
+            for (Coord food : foods)
+            {
+                graphicsContext.fillRect(food.getX() * increase, food.getY() * increase, increase, increase);
+            }
+            for (Map.Entry<Integer, Snake> snakeEntry : field.getSnakes().entrySet())
+            {
+                for (Coord coord : snakeEntry.getValue().getSnake())
+                {
+                    graphicsContext.setFill(Color.GREEN);
+                    if(coord.equals(snakeEntry.getValue().getHead()))
+                    {
+                        graphicsContext.setFill(Color.DARKGREEN);
+                    }
+                    graphicsContext.fillRect(coord.getX() * increase, coord.getY() * increase, increase, increase);
+                }
+            }
+        }
+
+        if(0 == lost && null == field.getSnake(playerId))
+        {
+            lost++;
             lostWindow();
-            stage.close();
-        }
-        graphicsContext.setFill(Color.BLACK);
-        graphicsContext.fillRect(0, 0,  width, height);
-
-        food = field.getFood();
-        graphicsContext.setFill(Color.BLUE);
-        graphicsContext.fillRect(food.getX(), food.getY(), increase, increase);
-
-        snake = field.getSnakeCoord();
-        graphicsContext.setFill(Color.BISQUE);
-        for (Coord i : snake)
-        {
-            graphicsContext.fillRect(i.getX(), i.getY(), increase , increase);
         }
     }
 
-    public Controller getController()
+    public int getUpdateTime()
     {
-        return controller;
+        return updateTime;
     }
 
-    public Snake getSnake()
-    {
-        return field.getSnake();
-    }
 }

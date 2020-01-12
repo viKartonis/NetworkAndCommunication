@@ -1,47 +1,50 @@
 package com.game.network;
 
-import com.game.controller.NetworkController;
+import com.game.model.*;
 import me.ippolitov.fit.snakes.SnakesProto;
 
 import java.io.IOException;
 import java.net.*;
 import java.nio.ByteBuffer;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class UDPUnicast
 {
     private DatagramSocket datagramSocket;
     private MulticastSocket multicastSocket;
-
-    private int timeOutInSecond;
-    private String name;
     private Set<IPEndPoint> child;
-    private IPEndPoint ipEndPointReserveNode;
-    private Map<IPEndPoint, Date> tracker;
     private Map<IPEndPoint, Set<Long>> seqAddress;
     private Map<Long, SnakesProto.GameMessage> queueMessage;
-
-    private IPEndPoint master;
-    private Set<Long> dataUid;
     private UDPManager udpManager;
-    private NetworkController networkController;
     private int state = 0;
-    private SnakesProto.GameMessage message;
-    private boolean deputy = false;
+    private boolean isMaster = false;
+    private boolean isDeputy = false;
+    private IPEndPoint deputyIp;
     private int port = 9192;
-    private String address = "127.0.0.1";
     private InetAddress group;
+    private GameField field;
+    private AtomicLong seq;
+    private Map<IPEndPoint, GamePlayer> gamePlayers;
+    private  Map<IPEndPoint, Date> lastResponse;
+    private SnakesProto.GameMessage announcment;
+    private int myId;
+    private int nextPlayerId = 1;
+    private int timeOut = 3000;
+    private List<Integer> needDelete = null;
 
-    public UDPUnicast() throws SocketException
+    public UDPUnicast(GameField field) throws SocketException
     {
+        myId = 0;
+        seq = new AtomicLong(0);
         seqAddress = new HashMap<>();
-        dataUid = new HashSet<>();
-        tracker = new HashMap<>();
-        timeOutInSecond = 10;
         child = new HashSet<>();
         queueMessage = new HashMap<>();
-        networkController = new NetworkController();
         datagramSocket = new DatagramSocket();
+        datagramSocket.setSoTimeout(250);
+        this.field = field;
+        gamePlayers = new HashMap<>();
+        lastResponse = new HashMap<>();
         try
         {
             group = InetAddress.getByName("239.192.0.4");
@@ -59,59 +62,93 @@ public class UDPUnicast
         {
             e.printStackTrace();
         }
+        udpManager = new UDPManager(datagramSocket, queueMessage, child, seqAddress);
     }
 
-    public SnakesProto.GameMessage receiveMessage()
+    public int getListenPort()
     {
-        try
-        {
-            System.out.println("Receive message");
-            int capacity = 4096;
-            datagramSocket.setSoTimeout(3000);
-
-            Date start = new Date(), end = start;
-            while (end.getTime() - start.getTime() < 3000)
-            {
-                try
-                {
-                    //ждать сообщения
-                    byte[] bufferReceive = new byte[capacity];
-                    DatagramPacket receiveMessage = new DatagramPacket(bufferReceive, capacity);
-
-                    datagramSocket.receive(receiveMessage);
-
-                    message = SnakesProto.GameMessage.parseFrom(receiveMessage.getData());
-
-                    udpManager = new UDPManager(datagramSocket, queueMessage, child, seqAddress, master);
-                }
-                catch (IOException e)
-                {
-                    e.printStackTrace();
-                }
-            }
-            end = new Date();
-        }
-        catch (SocketException e)
-        {
-            e.printStackTrace();
-        }
-        return message;
-    }
-
-
-    public void sendSteer() throws Exception
-    {
-        SnakesProto.GameMessage gameMessage = networkController.getGameMessage();
-        udpManager.send(gameMessage, master);
+        return datagramSocket.getLocalPort();
     }
 
     public class Pair<T, U> {
-        public final T t;
-        public final U u;
+        public final T first;
+        public final U second;
 
-        public Pair(T t, U u) {
-            this.t= t;
-            this.u= u;
+        public Pair(T first, U second) {
+            this.first = first;
+            this.second = second;
+        }
+    }
+    public void becomeMaster()
+    {
+        System.out.println("Becoming master");
+        SnakesProto.GameMessage.RoleChangeMsg roleChangeMsg = SnakesProto.GameMessage.RoleChangeMsg.newBuilder()
+                .setSenderRole(SnakesProto.NodeRole.MASTER).build();
+        SnakesProto.GameMessage gameMessage = SnakesProto.GameMessage.newBuilder().setMsgSeq(seq.incrementAndGet())
+                .setRoleChange(roleChangeMsg).build();
+        try
+        {
+            for(Map.Entry<IPEndPoint, GamePlayer> player : gamePlayers.entrySet())
+            {
+                 if (player.getValue().getPlayerId() != myId)
+                 {
+                     child.add(player.getKey());
+                 }
+            }
+            setAnnouncment("",field.getWidth(),field.getHeight(), field.getFoodStatic(), 150, field.getFoodDrop());
+            udpManager.sendDataMessageEveryNode(gameMessage);
+            isDeputy = false;
+            isMaster = true;
+
+            if(child.iterator().hasNext())
+            {
+                System.out.println("Assigning deputy");
+
+                deputyIp = child.iterator().next();
+                SnakesProto.GameMessage.RoleChangeMsg roleChange = SnakesProto.GameMessage.RoleChangeMsg
+                        .newBuilder().setReceiverRole(SnakesProto.NodeRole.DEPUTY).build();
+                SnakesProto.GameMessage gameMessageRole = SnakesProto.GameMessage.newBuilder()
+                        .setMsgSeq(seq.incrementAndGet()).setRoleChange(roleChange).build();
+                udpManager.send(gameMessageRole, deputyIp);
+            }
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    public void sendAndCheck(SnakesProto.GameMessage gameMessage, IPEndPoint ipEndPoint)
+    {
+        Date currentDate = new Date();
+        Date date = lastResponse.get(ipEndPoint);
+        if(null == date)
+        {
+            return;
+        }
+
+        if(currentDate.getTime() - date.getTime() <= timeOut)
+        {
+            try
+            {
+                udpManager.send(gameMessage, ipEndPoint);
+            }
+            catch(Exception e)
+            {
+                e.printStackTrace();
+            }
+        }
+        else
+        {
+            child.remove(ipEndPoint);
+            seqAddress.remove(ipEndPoint);
+            gamePlayers.remove(ipEndPoint);
+            lastResponse.remove(ipEndPoint);
+
+            if(isDeputy && udpManager.getIpEndPointParent().equals(ipEndPoint))
+            {
+                becomeMaster();
+            }
         }
     }
 
@@ -138,16 +175,33 @@ public class UDPUnicast
         }
         catch (IOException e)
         {
-            //e.printStackTrace();
             return null;
         }
 
-        return new Pair<>(new IPEndPoint(receiveMessage.getAddress(), receiveMessage.getPort()),
+        int masterPort = -1;
+        for (SnakesProto.GamePlayer player : announcementMsg.getAnnouncement().getPlayers().getPlayersList())
+        {
+            try
+            {
+                gamePlayers.put(new IPEndPoint(receiveMessage.getAddress(), receiveMessage.getPort()),
+                        new GamePlayer(player.getIpAddress(), player.getPort(), player.getScore(), player.getId(),
+                                player.getRole(), player.getName()));
+            }
+            catch (UnknownHostException e)
+            {
+                e.printStackTrace();
+            }
+            if (player.getRole() == SnakesProto.NodeRole.MASTER)
+            {
+                masterPort = player.getPort();
+            }
+        }
+        return new Pair<>(new IPEndPoint(receiveMessage.getAddress(), masterPort),
                 announcementMsg.getAnnouncement());
     }
 
 
-    public Pair receiveJoin()
+    public Pair<IPEndPoint, SnakesProto.GameMessage> receive()
     {
         byte[] bufferReceive = new byte[4096];
         DatagramPacket receiveMessage = new DatagramPacket(bufferReceive, 4096);
@@ -156,48 +210,158 @@ public class UDPUnicast
         {
             datagramSocket.receive(receiveMessage);
         }
+        catch (SocketTimeoutException e)
+        {
+            return null;
+        }
         catch (IOException e)
         {
             e.printStackTrace();
-        }
-
-        SnakesProto.GameMessage joinMsg;
-        try
-        {
-            joinMsg = SnakesProto.GameMessage
-                    .parseFrom(ByteBuffer.wrap(receiveMessage.getData(), 0, receiveMessage.getLength()));
-
-        }
-        catch (IOException e)
-        {
-            //e.printStackTrace();
             return null;
         }
 
-        return new Pair<>(new IPEndPoint(receiveMessage.getAddress(),
-                receiveMessage.getPort()), joinMsg.getJoin());
-    }
-
-    public void sendGameState(SnakesProto.GameMessage gameMessage)
-    {
+        IPEndPoint senderIp = new IPEndPoint(receiveMessage.getAddress(), receiveMessage.getPort());
+        lastResponse.put(senderIp, new Date());
+        SnakesProto.GameMessage gameMessage;
         try
         {
-            udpManager.sendDataMessageEveryNode(gameMessage);
+            gameMessage = SnakesProto.GameMessage
+                    .parseFrom(ByteBuffer.wrap(receiveMessage.getData(), 0, receiveMessage.getLength()));
+            switch (gameMessage.getTypeCase())
+            {
+                case JOIN:
+                {
+                    sendAck(gameMessage.getMsgSeq(), senderIp);
+                    SnakesProto.NodeRole role = SnakesProto.NodeRole.NORMAL;
+
+                    if(null == deputyIp)
+                    {
+                        System.out.println("Set deputy");
+                        role = SnakesProto.NodeRole.DEPUTY;
+                        deputyIp = senderIp;
+                    }
+
+                    int senderId = nextPlayerId;
+                    nextPlayerId++;
+                    gamePlayers.put(senderIp,
+                            new GamePlayer(senderIp, 0, senderId, role, gameMessage.getJoin().getName()));
+                    if(field.addSnake(senderId))
+                    {
+                        child.add(senderIp);
+                        try
+                        {
+                            SnakesProto.GameMessage gameMessageState = makeStateMessage(senderId);
+
+                            SnakesProto.GameMessage.RoleChangeMsg roleChangeMsg = SnakesProto.GameMessage.RoleChangeMsg
+                                    .newBuilder().setReceiverRole(role).build();
+                            SnakesProto.GameMessage gameMessageRole = SnakesProto.GameMessage.newBuilder()
+                                    .setMsgSeq(seq.incrementAndGet()).setRoleChange(roleChangeMsg).build();
+                            sendAndCheck(gameMessageState, senderIp);
+                            sendAndCheck(gameMessageRole, senderIp);
+                        }
+                        catch (Exception e)
+                        {
+                            e.printStackTrace();
+                        }
+                    }
+                    else
+                    {
+                        SnakesProto.GameMessage.ErrorMsg errorMsg = SnakesProto.GameMessage.ErrorMsg.newBuilder()
+                                .setErrorMessage("Cannot to join to this game").build();
+                        SnakesProto.GameMessage gameErrorMessage = SnakesProto.GameMessage.newBuilder().setError(errorMsg)
+                                .setMsgSeq(seq.incrementAndGet()).build();
+                        try
+                        {
+                            udpManager.send(gameErrorMessage, senderIp);
+                        }
+                        catch (Exception e)
+                        {
+                            e.printStackTrace();
+                        }
+                    }
+                    break;
+                }
+                case ACK:
+                {
+                    if (seqAddress.get(senderIp) != null)
+                        seqAddress.get(senderIp).remove(gameMessage.getMsgSeq());
+                    break;
+                }
+                case STATE:
+                {
+                    sendAck(gameMessage.getMsgSeq(), senderIp);
+
+                    ProtobuffConverter.protoToModel(gameMessage.getState().getState(), field, gamePlayers);
+
+                    break;
+                }
+                case STEER:
+                {
+                    sendAck(gameMessage.getMsgSeq(), senderIp);
+                    field.setDirection(ProtobuffConverter.protoToModel(gameMessage.getSteer().getDirection()),
+                            gamePlayers.get(senderIp).getPlayerId());
+                    break;
+                }
+                case ERROR:
+                {
+                    sendAck(gameMessage.getMsgSeq(), senderIp);
+                    break;
+                }
+                case PING:
+                {
+                    sendAck(gameMessage.getMsgSeq(), senderIp);
+                    break;
+                }
+                case ROLE_CHANGE:
+                {
+                    sendAck(gameMessage.getMsgSeq(), senderIp);
+
+                    if(SnakesProto.NodeRole.MASTER == gameMessage.getRoleChange().getSenderRole() && !isMaster)
+                    {
+                        System.out.println("Master changed");
+                        udpManager.setIpEndPointParent(senderIp);
+                    }
+                    if(SnakesProto.NodeRole.DEPUTY == gameMessage.getRoleChange().getReceiverRole() && !isMaster)
+                    {
+                        System.out.println("I am deputy");
+                        isDeputy = true;
+                    }
+                    break;
+                }
+          }
         }
         catch (IOException e)
         {
             e.printStackTrace();
+            return null;
         }
+
+        return new Pair<>(senderIp, gameMessage);
     }
 
-    public void sendAnnouncement(SnakesProto.GameMessage message) throws IOException
+    public void sendAck(long msgSeq, IPEndPoint endPoint)
     {
-        int len = message.toByteArray().length;
-        DatagramPacket sendMessage = new DatagramPacket(message.toByteArray(), message.toByteArray().length,
-                group, port);
+        SnakesProto.GameMessage.AckMsg ack = SnakesProto.GameMessage.AckMsg.newBuilder().build();
+        SnakesProto.GameMessage ackMsg = SnakesProto.GameMessage.newBuilder().setAck(ack)
+                .setMsgSeq(msgSeq).build();
+        try
+        {
+            sendAndCheck(ackMsg, endPoint);
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
 
-       SnakesProto.GameMessage announcementMsg = SnakesProto.GameMessage
-                .parseFrom(ByteBuffer.wrap(sendMessage.getData(), 0, sendMessage.getLength()));
+    }
+
+    public void sendAnnouncement() throws IOException
+    {
+        if (!isMaster)
+            return;
+
+        DatagramPacket sendMessage = new DatagramPacket(announcment.toByteArray(), announcment.toByteArray().length,
+                group, port);
 
         multicastSocket.send(sendMessage);
     }
@@ -208,7 +372,7 @@ public class UDPUnicast
     {
         try
         {
-            udpManager.setConnection(ipEndPoint, playersType, viewer, playerName);
+            udpManager.setConnection(ipEndPoint, playersType, viewer, playerName, seq.incrementAndGet());
         }
         catch (IOException e)
         {
@@ -216,95 +380,31 @@ public class UDPUnicast
         }
     }
 
-
-    public void sendMessage(SnakesProto.GameMessage message)
+    public void sendSteer(SnakesProto.Direction direction)
     {
-        //проверить когда наш ресивер последний раз был в сети
-        Date time = new Date();
-        List<IPEndPoint> deleteList = new LinkedList<>();
-        for (Map.Entry<IPEndPoint, Date> current : tracker.entrySet())
+        if (isMaster)
         {
-            if (time.getTime() - current.getValue().getTime() >= timeOutInSecond * 1000)
-            {
-                deleteList.add(current.getKey());
-                System.out.println("DELETE" + current.getKey().toString());
-
-                if (current.getKey().equals(master))
-                {
-                    //перестроить дерево
-                    master = ipEndPointReserveNode;
-                    try
-                    {
-                        udpManager.setConnection(ipEndPointReserveNode, SnakesProto.PlayerType.HUMAN,
-                                false,
-                                name);
-                        ipEndPointReserveNode = null;
-
-                        if (deputy)
-                        {
-                            SnakesProto.GameMessage.RoleChangeMsg masterMessage = SnakesProto.GameMessage
-                                    .RoleChangeMsg.newBuilder()
-                                    .setSenderRole(SnakesProto.NodeRole.MASTER)
-                                    .build();
-
-                            SnakesProto.GameMessage gameMessage = SnakesProto.GameMessage.newBuilder()
-                                    .setRoleChange(masterMessage).build();
-
-                            udpManager.sendDataMessageExceptOne(gameMessage, master);
-                        }
-
-                    }
-                    catch (IOException e)
-                    {
-                        e.printStackTrace();
-                    }
-                }
-                else
-                {
-                    //удалить которые сломались
-                    child.remove(current.getKey());
-                }
-            }
-        }
-        for (IPEndPoint ipEndPoint : deleteList)
-        {
-            tracker.remove(ipEndPoint);
+            field.setDirection(ProtobuffConverter.protoToModel(direction), myId);
+            return;
         }
 
-        //перепослать сообщения
-        for (Map.Entry<IPEndPoint, Set<Long>> current : seqAddress.entrySet())
-        {
-            for (Long uuid : current.getValue())
-            {
-                //byte[] message = queueMessage.get(uuid).toByteArray();
-                try
-                {
-                    datagramSocket.send(new DatagramPacket(message.toByteArray(), message.toByteArray().length,
-                            current.getKey().getAddress(),
-                            current.getKey().getPort()));
-                }
-                catch (IOException e)
-                {
-                    e.printStackTrace();
-                }
-            }
-        }
-
-        //ping
-        SnakesProto.GameMessage.PingMsg pingMessage = SnakesProto.GameMessage
-                .PingMsg.newBuilder().build();
+        SnakesProto.GameMessage.SteerMsg steerMessage = SnakesProto.GameMessage
+                .SteerMsg.newBuilder()
+                .setDirection(direction).build();
 
         SnakesProto.GameMessage gameMessage = SnakesProto.GameMessage.newBuilder()
-                .setPing(pingMessage).build();
+                .setSteer(steerMessage).setMsgSeq(seq.incrementAndGet()).build();
+
         try
         {
-            udpManager.sendDataMessageEveryNode(gameMessage);
+            sendAndCheck(gameMessage, udpManager.getIpEndPointParent());
         }
-        catch (IOException e)
+        catch (Exception e)
         {
             e.printStackTrace();
         }
     }
+
 
     public DatagramSocket getDatagramSocket()
     {
@@ -326,12 +426,149 @@ public class UDPUnicast
         return seqAddress;
     }
 
-    public IPEndPoint getMaster()
+    public IPEndPoint getIpEndPointParent()
     {
-        return master;
+        return udpManager.getIpEndPointParent();
     }
 
+    public SnakesProto.GameMessage makeStateMessage()
+    {
+        SnakesProto.GameMessage.StateMsg stateMsg = SnakesProto.GameMessage.StateMsg.newBuilder()
+                .setState(ProtobuffConverter.modelToProto(field, gamePlayers))
+                .build();
 
+        return SnakesProto.GameMessage.newBuilder()
+                .setState(stateMsg).setMsgSeq(seq.incrementAndGet()).build();
+
+    }
+
+    public SnakesProto.GameMessage makeStateMessage(int receiverId)
+    {
+        SnakesProto.GameMessage.StateMsg stateMsg = SnakesProto.GameMessage.StateMsg.newBuilder()
+                .setState(ProtobuffConverter.modelToProto(field, gamePlayers))
+                .build();
+
+       return SnakesProto.GameMessage.newBuilder()
+                .setState(stateMsg).setMsgSeq(seq.incrementAndGet()).setReceiverId(receiverId).build();
+
+    }
+
+    public void sendState()
+    {
+        if (!isMaster)
+            return;
+
+        try
+        {
+            SnakesProto.GameMessage gameMessageState = makeStateMessage();
+
+            for (IPEndPoint childIp : child)
+            {
+                sendAndCheck(gameMessageState, childIp);
+            }
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+
+    }
+
+    public void setAnnouncment(String playerName, int width, int height, int foodNum, int timenum, float foodDrop)
+    {
+        SnakesProto.GamePlayer masterPlayer = SnakesProto.GamePlayer.newBuilder().setId(0)
+                .setPort(getListenPort()).setRole(SnakesProto.NodeRole.MASTER)
+                .setType(SnakesProto.PlayerType.HUMAN).setIpAddress("127.0.0.1").setScore(0)
+                .setName(playerName).build();
+        SnakesProto.GamePlayers allPlayers = SnakesProto.GamePlayers.newBuilder().addPlayers(masterPlayer)
+                .build();
+
+        SnakesProto.GameConfig gameConfig = SnakesProto.GameConfig.newBuilder().setWidth(width)
+                .setHeight(height)
+                .setFoodStatic(foodNum)
+                .setStateDelayMs(timenum)
+                .setDeadFoodProb(foodDrop)
+                .build();
+
+        SnakesProto.GameMessage.AnnouncementMsg announcementMsg =
+                SnakesProto.GameMessage.AnnouncementMsg.newBuilder().setPlayers(allPlayers).setConfig(gameConfig).build();
+
+        announcment = SnakesProto.GameMessage.newBuilder().setAnnouncement(announcementMsg)
+                .setMsgSeq(seq.incrementAndGet())
+                .build();
+    }
+
+    public void resendMessages()
+    {
+        for (Map.Entry<IPEndPoint, Set<Long>> current : seqAddress.entrySet())
+        {
+            for (Long uuid : current.getValue())
+            {
+                try
+                {
+                    SnakesProto.GameMessage message = queueMessage.get(uuid);
+                    datagramSocket.send(new DatagramPacket(message.toByteArray(), message.toByteArray().length,
+                            current.getKey().getAddress(),
+                            current.getKey().getPort()));
+                }
+                catch (IOException e)
+                {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    public void sendPing()
+    {
+        SnakesProto.GameMessage.PingMsg pingMsg = SnakesProto.GameMessage.PingMsg.newBuilder().build();
+        SnakesProto.GameMessage gamePingMessage = SnakesProto.GameMessage.newBuilder().setMsgSeq(seq.incrementAndGet())
+                .setPing(pingMsg).build();
+        try
+        {
+            if(isMaster)
+            {
+                udpManager.sendDataMessageEveryNode(gamePingMessage);
+            }
+            else if (null != getIpEndPointParent())
+            {
+                sendAndCheck(gamePingMessage, udpManager.getIpEndPointParent());
+            }
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+    }
+
+    public boolean isMaster()
+    {
+        return isMaster;
+    }
+
+    public void setMaster(boolean master)
+    {
+        isMaster = master;
+        if (isMaster)
+        {
+            gamePlayers.clear();
+            try
+            {
+                IPEndPoint myIp = new IPEndPoint(InetAddress.getByName("127.0.0.1"), datagramSocket.getLocalPort());
+                gamePlayers.put(myIp, new GamePlayer(myIp, 0, 0, SnakesProto.NodeRole.MASTER,
+                        "MASTER"));
+            }
+            catch (UnknownHostException e)
+            {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public void setId(int id)
+    {
+        myId = id;
+    }
 }
 
 
